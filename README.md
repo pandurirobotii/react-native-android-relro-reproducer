@@ -1,19 +1,48 @@
 # React Native Android RELRO Reproducer
 
-Reproducer for [react-native issue #58852](https://github.com/react/react-native/issues/58852): public React Android binaries pass the 16 KB ELF LOAD alignment check but fail the GNU_RELRO end-modulo check documented by Android.
+Reproducer for [react-native issue #58852](https://github.com/react/react-native/issues/58852): the built template debug APK contains React Android binaries that pass the 16 KB ELF LOAD alignment check but fail the GNU_RELRO end-modulo check documented by Android.
 
 `ReproducerApp/` is unchanged from the official [react-native-community/reproducer-react-native template](https://github.com/react-native-community/reproducer-react-native/tree/181acd6681a41578c9067c0e3e3577cb033721fc). It pins React Native `0.87.1` and React `19.2.3`. This is an independent copy of that template snapshot, not a fork of React Native or a production application.
 
 ## Validation Status
 
+- Validated: `yarn install` and `./gradlew :app:assembleDebug` completed successfully on macOS.
+- Validated: the generated debug APK contains 22 ARM64/x86_64 libraries; all pass LOAD alignment, and 17 fail the documented RELRO end check. The checker exits `1`.
 - Validated: static inspection of the public `react-android:0.87.1` debug artifact, including both ARM64 and x86_64 binaries.
 - Validated: checker behavior against synthetic passing, failing, missing-RELRO, 32-bit, and malformed ELF inputs.
-- Not performed: dependency installation, template app build, or an Android 17 runtime reproduction.
+- Not performed: Android 17 runtime reproduction.
 - Automatic template cleanup, build, and updater workflows were removed. This repository does not run dependency installation or builds on push.
 
 This demonstrates a static mismatch with the documented RELRO check, not an observed crash or proof that every flagged library is rejected by the loader. RELRO suffix layouts can be accepted by the loader even when this arithmetic check fails. Android 17's warning can also list unaffected libraries; see [Google issue 564679026](https://issuetracker.google.com/issues/564679026).
 
-## Minimal Reproduction Without Building
+## Build and Reproduce
+
+Use Node >= `22.11.0`, Yarn, JDK 17, Python 3, and an Android SDK with the template's declared build tools `37.0.0`, compile SDK `37`, and NDK `27.1.12297006`. Configure `ANDROID_HOME` or a local, untracked `ReproducerApp/android/local.properties` as usual.
+
+Run from the repository root:
+
+```sh
+cd ReproducerApp
+yarn install
+cd android
+./gradlew :app:assembleDebug
+cd ../..
+python3 -B check_relro.py ReproducerApp/android/app/build/outputs/apk/debug/app-debug.apk
+```
+
+The Gradle build succeeds. The checker reports RELRO layout failures in the generated APK and exits `1`. Representative output from the validated build:
+
+```text
+lib/arm64-v8a/libjsi.so (arm64-v8a)
+LOAD alignment: PASS
+GNU_RELRO: vaddr=0xe4af0 memsz=0x5510 end=0xea000 remainder=0x2000
+RELRO end modulo 16 KB: FAIL
+Checked 22 libraries; 17 failed static layout checks.
+```
+
+The APK total includes RN-owned binaries, bundled FBJNI/libc++/Fresco artifacts, and locally built app/codegen libraries; it does not attribute all 17 failures to RN-owned prebuilt targets. Hermes VM passes for both inspected ABIs. The RN-owned measurements below are also present in the built APK.
+
+## Supplemental AAR Inspection
 
 Requires Python 3 and curl. The checker uses only Python's standard library and never loads or executes native libraries.
 
@@ -49,20 +78,7 @@ React Native-owned examples:
 | ARM64  | libhermestooling.so | 0x8a860   | 0x37a0  | 0x8e000   | 0x2000       |
 | x86_64 | libhermestooling.so | 0x83210   | 0x3df0  | 0x87000   | 0x3000       |
 
-## Template App Build Path
-
-These instructions are provided for maintainers to build and inspect the packaged app; they have not been executed for this repository.
-
-Use Node >= `22.11.0`, Yarn, JDK 17, and an Android SDK with the template's declared build tools `37.0.0`, compile SDK `37`, and NDK `27.1.12297006`. Configure `ANDROID_HOME` or a local, untracked `ReproducerApp/android/local.properties` as usual.
-
-```sh
-cd ReproducerApp
-yarn install
-cd android
-./gradlew :app:assembleDebug
-cd ../..
-python3 -B check_relro.py ReproducerApp/android/app/build/outputs/apk/debug/app-debug.apk
-```
+## Additional Checks
 
 The checker also accepts an extracted native-library directory or an individual `.so`. To inspect packaging separately, use Android SDK `zipalign -c -P 16 -v 4` on the APK. A successful ZIP alignment check does not establish RELRO compatibility.
 
